@@ -2041,6 +2041,349 @@ register(FormatSpec(
     build_f22))
 
 
+# ── F26 틀린 하나 찾기 ────────────────────────────────────────
+def _variant(st: Image.Image, mode: str) -> Image.Image:
+    if mode == "flip":
+        return st.transpose(Image.FLIP_LEFT_RIGHT)
+    if mode == "tint":
+        r, g, b, a = st.split()
+        return Image.merge("RGBA", (r.point(lambda v: min(255, int(v * 0.85))), g, b.point(lambda v: min(255, int(v * 1.15))), a))
+    if mode == "rotate":
+        return st.rotate(12, resample=Image.BICUBIC, expand=True)
+    if mode == "gray":
+        g = st.convert("L").convert("RGBA"); g.putalpha(st.split()[3]); return g
+    return st.transpose(Image.FLIP_LEFT_RIGHT)
+
+
+def build_f26(ctx: Ctx, p: dict) -> List[Scene]:
+    title = P(p, "title", "다른 하나를 찾아라!")
+    idx = int(P(p, "sticker", 1))
+    mode = P(p, "difference", "flip")
+    timer = float(P(p, "timer", 5))
+    cols, rows = 4, 5
+    cta = P(p, "cta", "몇 초 만에 찾았어? 댓글로!")
+    rng = random.Random(rseed(p))
+    odd = rng.randrange(cols * rows)
+    st = ctx.st(idx); var = _variant(st, mode)
+    gx0, gx1, gy0, gy1 = 70, W - 70, 480, 1560
+    cw, ch = (gx1 - gx0) / cols, (gy1 - gy0) / rows
+
+    def grid(img, t, reveal=False):
+        d = ImageDraw.Draw(img)
+        for k in range(cols * rows):
+            r, c = divmod(k, cols)
+            x = gx0 + c * cw + cw / 2; y = gy0 + r * ch + ch / 2
+            s = pop(t, 0.02 * k, 0.3) if not reveal else 1.0
+            d.rounded_rectangle((x - cw / 2 + 8, y - ch / 2 + 8, x + cw / 2 - 8, y + ch / 2 - 8), radius=26, fill=WHITE)
+            paste_sticker(img, var if k == odd else st, x, y, size=int((cw - 40) * s), height=int((ch - 40) * s))
+        if reveal:
+            r, c = divmod(odd, cols)
+            x = gx0 + c * cw + cw / 2; y = gy0 + r * ch + ch / 2
+            pr = 1 + 0.05 * math.sin(t * 8)
+            d.rounded_rectangle((x - cw / 2 * pr + 2, y - ch / 2 * pr + 2, x + cw / 2 * pr - 2, y + ch / 2 * pr - 2),
+                                radius=30, outline=(255, 80, 90), width=14)
+
+    def draw_q(t, img):
+        draw_text(img, title, CX, SAFE_TOP + 90, size=78, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
+        grid(img, t)
+        draw_ring_countdown(img, CX, 1635, 56, 1 - t / timer, ctx.accent, width=14, track=ctx.shape_color)
+        draw_text(img, str(max(1, math.ceil(timer - t))), CX, 1635, size=52, fill=ctx.ink)
+
+    def draw_a(t, img):
+        draw_text(img, "정답은 여기!", CX, SAFE_TOP + 90, size=78, font_name="title", fill=(255, 80, 90), stroke=WHITE, stroke_w=10)
+        grid(img, t, reveal=True)
+        draw_pill(img, cta, CX, 1640, size=40, fill=ctx.accent, text_fill=WHITE, scale=pop(t, 0.3))
+    return [title_scene(ctx, title, 1.3, sub={"flip": "하나만 좌우가 반대!", "tint": "하나만 색이 달라!", "rotate": "하나만 기울어 있어!", "gray": "하나만 흑백!"}.get(mode, "")),
+            Scene(timer, draw_q), Scene(2.6, draw_a)]
+
+
+register(FormatSpec(
+    "F26", "틀린 하나 찾기", "참여형",
+    "같은 스티커 20개 중 하나만 다름(좌우반전/색/기울기/흑백) → 카운트다운 → 정답 표시",
+    [Field("title", "타이틀", "text", "다른 하나를 찾아라!"),
+     Field("sticker", "스티커 번호", "sticker", lambda pk: 1),
+     Field("difference", "다른 점", "choice", "flip", options=["flip", "tint", "rotate", "gray"]),
+     Field("timer", "제한 시간(초)", "float", 5, min=2, max=10),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
+     Field("cta", "마무리 CTA", "text", "몇 초 만에 찾았어? 댓글로!")],
+    build_f26))
+
+
+# ── F27 숨은 캐릭터 찾기 ─────────────────────────────────────
+def build_f27(ctx: Ctx, p: dict) -> List[Scene]:
+    title = P(p, "title", "숨은 지큐를 찾아라!")
+    target = int(P(p, "target", 1))
+    count = int(P(p, "count", 40))
+    timer = float(P(p, "timer", 6))
+    cta = P(p, "cta", "찾았으면 댓글에 '찾았다'!")
+    rng = random.Random(rseed(p))
+    others = [i for i in range(1, len(ctx.pack) + 1) if i != target] or [target]
+    items = []
+    for k in range(count):
+        items.append((rng.uniform(120, W - 120), rng.uniform(560, 1560), rng.choice(others), rng.uniform(-25, 25), rng.uniform(0.8, 1.15)))
+    tx, ty = rng.uniform(160, W - 160), rng.uniform(600, 1520)
+    tpos = rng.randrange(len(items))
+    items.insert(tpos, (tx, ty, target, rng.uniform(-15, 15), 0.9))
+    tst = ctx.st(target)
+
+    def field(img, t, reveal=False):
+        for k, (x, y, i, rot, sc) in enumerate(items):
+            s = pop(t, 0.012 * k, 0.3) if not reveal else 1.0
+            paste_sticker(img, ctx.st(i), x, y, size=int(190 * sc * s), rot=rot)
+        if reveal:
+            d = ImageDraw.Draw(img)
+            r = 130 + 8 * math.sin(t * 8)
+            d.ellipse((tx - r, ty - r, tx + r, ty + r), outline=(255, 80, 90), width=14)
+
+    def draw_q(t, img):
+        draw_pill(img, title, CX, SAFE_TOP + 70, size=46, fill=ctx.accent, text_fill=WHITE)
+        draw_card(img, (60, 340, 400, 500), radius=30, fill=WHITE, shadow=None)
+        d = ImageDraw.Draw(img); d.text((100, 420), "찾을 스티커 →", font=font("bold", 30), fill=INK, anchor="lm")
+        paste_sticker(img, tst, 330, 420, size=120, height=130)
+        field(img, t)
+        draw_ring_countdown(img, W - 130, 420, 60, 1 - t / timer, ctx.accent, width=14, track=ctx.shape_color)
+        draw_text(img, str(max(1, math.ceil(timer - t))), W - 130, 420, size=54, fill=ctx.ink)
+
+    def draw_a(t, img):
+        draw_pill(img, "여기 있었지롱!", CX, SAFE_TOP + 70, size=46, fill=(255, 80, 90), text_fill=WHITE)
+        field(img, t, reveal=True)
+        draw_pill(img, cta, CX, 1650, size=40, fill=WHITE, text_fill=INK, scale=pop(t, 0.3), shadow=ctx.shape_color)
+    return [title_scene(ctx, title, 1.3, sub="제한 시간 안에 찾기!", sticker=target),
+            Scene(timer, draw_q), Scene(2.6, draw_a)]
+
+
+register(FormatSpec(
+    "F27", "숨은 캐릭터 찾기", "참여형",
+    "수십 개 스티커 사이에 숨은 타깃 스티커 찾기 → 카운트다운 → 위치 공개",
+    [Field("title", "타이틀", "text", "숨은 지큐를 찾아라!"),
+     Field("target", "찾을 스티커 번호", "sticker", lambda pk: 1),
+     Field("count", "방해 스티커 개수", "int", 40, min=10, max=80),
+     Field("timer", "제한 시간(초)", "float", 6, min=2, max=12),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
+     Field("cta", "마무리 CTA", "text", "찾았으면 댓글에 '찾았다'!")],
+    build_f27))
+
+
+# ── F28 슬롯머신 뽑기 ────────────────────────────────────────
+def build_f28(ctx: Ctx, p: dict) -> List[Scene]:
+    title = P(p, "title", "오늘의 지큐 뽑기")
+    idxs = as_int_list(P(p, "stickers"), spread(len(ctx.pack), 6))
+    results = as_lines(P(p, "results"), ["행운 가득한 하루!", "간식 먹고 힘내기", "오늘은 푹 쉬는 날", "칭찬 받을 예정", "깜짝 선물 예감", "무한 귀여움 충전"])
+    cta = P(p, "cta", "너는 뭐 나왔어? 댓글로!")
+    rng = random.Random(rseed(p))
+    sts = [ctx.st(i) for i in idxs]
+    n = len(sts)
+    jackpot = rng.random() < float(P(p, "jackpot_rate", 0.3))
+    final = [rng.randrange(n)] * 3 if jackpot else [rng.randrange(n) for _ in range(3)]
+    if not jackpot and final[0] == final[1] == final[2]:
+        final[2] = (final[2] + 1) % n
+    stops = [2.2, 3.2, 4.2]
+    cell = 300; y0 = 760
+    xs = [CX - cell - 20, CX, CX + cell + 20]
+    result_txt = results[final[0] % len(results)]
+
+    def static(img):
+        draw_card(img, (60, y0 - cell / 2 - 60, W - 60, y0 + cell / 2 + 60), radius=50, fill=(80, 60, 110), shadow=None)
+        d = ImageDraw.Draw(img)
+        for x in xs:
+            d.rounded_rectangle((x - cell / 2, y0 - cell / 2, x + cell / 2, y0 + cell / 2), radius=28, fill=WHITE)
+        d.rounded_rectangle((W - 120, y0 - 40, W - 70, y0 + 40), radius=25, fill=(255, 90, 90))
+
+    def reel_pos(k, t):
+        """릴 k의 현재 오프셋(스티커 인덱스 실수)."""
+        stop = stops[k]
+        if t >= stop:
+            return float(final[k])
+        # 감속: 남은 시간이 짧을수록 느려짐
+        speed = 14.0 * clamp((stop - t) / stop) + 1.5
+        return (final[k] - speed * (stop - t) * 0.6) % n
+
+    def draw_spin(t, img):
+        draw_text(img, title, CX, SAFE_TOP + 100, size=80, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
+        for k, x in enumerate(xs):
+            pos = reel_pos(k, t)
+            layer = Image.new("RGBA", (cell, cell), (0, 0, 0, 0))
+            base = int(math.floor(pos)); frac = pos - base
+            for j in (-1, 0, 1):
+                idx = (base + j) % n
+                cy = cell / 2 + (j - frac) * cell
+                paste_sticker(layer, sts[idx], cell / 2, cy, size=cell - 40, height=cell - 40)
+            img.paste(layer, (int(x - cell / 2), int(y0 - cell / 2)), layer)
+            if t >= stops[k]:
+                ImageDraw.Draw(img).rounded_rectangle((x - cell / 2, y0 - cell / 2, x + cell / 2, y0 + cell / 2), radius=28,
+                                                      outline=ctx.accent, width=10)
+        if t < stops[0]:
+            draw_pill(img, "돌아가는 중…", CX, 1240, size=44, fill=WHITE, text_fill=INK)
+        elif t > stops[2] + 0.2:
+            if jackpot:
+                draw_confetti(img, t, seed=rseed({}), start=stops[2] + 0.2)
+                draw_text(img, "JACKPOT!!", CX, 1240, size=110, font_name="title", fill=ctx.accent, stroke=WHITE, stroke_w=12)
+            else:
+                draw_text(img, "결과 확인!", CX, 1240, size=90, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
+
+    def draw_result(t, img):
+        if jackpot:
+            draw_confetti(img, t, seed=rseed({}))
+        draw_text(img, "오늘의 결과", CX, 400, size=64, fill=ctx.ink, stroke=WHITE, stroke_w=9)
+        paste_sticker(img, sts[final[0]], CX, 900 + bob(t, 10), size=740, scale=pop(t, 0, 0.45), rot=wobble(t, 3))
+        draw_sparkles(img, t, CX, 900, 400, n=8, seed=28)
+        draw_text(img, result_txt, CX, 1380, size=80, font_name="title", fill=ctx.accent, stroke=WHITE, stroke_w=10, alpha=fade(t, 0.3), max_w=W - 160)
+        draw_pill(img, cta, CX, 1560, size=42, fill=WHITE, text_fill=INK, scale=pop(t, 0.6), shadow=ctx.shape_color)
+    return [Scene(6.0, draw_spin, static), Scene(3.0, draw_result)]
+
+
+register(FormatSpec(
+    "F28", "슬롯머신 뽑기", "참여형",
+    "슬롯 3칸이 차례로 멈춤 → (잭팟) → 결과 스티커 + 오늘의 문구",
+    [Field("title", "타이틀", "text", "오늘의 지큐 뽑기"),
+     Field("stickers", "릴에 들어갈 스티커들", "stickers", lambda pk: spread(len(pk), 6), n=6),
+     Field("results", "결과 문구 (한 줄에 하나, 스티커 순서대로)", "textarea", "행운 가득한 하루!\n간식 먹고 힘내기\n오늘은 푹 쉬는 날\n칭찬 받을 예정\n깜짝 선물 예감\n무한 귀여움 충전"),
+     Field("jackpot_rate", "잭팟 확률(0~1)", "float", 0.3, min=0, max=1),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
+     Field("cta", "마무리 CTA", "text", "너는 뭐 나왔어? 댓글로!")],
+    build_f28))
+
+
+# ── F29 티어표 ───────────────────────────────────────────────
+_TIER_COLORS = {"S": (255, 127, 127), "A": (255, 191, 127), "B": (255, 223, 127), "C": (191, 255, 127), "D": (127, 191, 255), "F": (200, 200, 210)}
+
+
+def build_f29(ctx: Ctx, p: dict) -> List[Scene]:
+    title = P(p, "title", "지큐 표정 티어표")
+    raw = as_lines(P(p, "items"), [f"S|{i}" for i in spread(len(ctx.pack), 2, 0)] + [f"A|{i}" for i in spread(len(ctx.pack), 3, 1)]
+                   + [f"B|{i}" for i in spread(len(ctx.pack), 2, 2)] + [f"C|{i}" for i in spread(len(ctx.pack), 2, 3)])
+    per = float(P(p, "per", 0.55))
+    cta = P(p, "cta", "S티어 동의? 반박은 댓글로!")
+    tiers = as_lines(P(p, "tiers"), ["S", "A", "B", "C"])
+    items = []
+    for l in raw:
+        a, _, b = l.partition("|")
+        try:
+            items.append((a.strip().upper(), int(b)))
+        except Exception:
+            pass
+    rows = {t: [i for tt, i in items if tt == t] for t in tiers}
+    ty0, ty1 = 500, 1600
+    rh = (ty1 - ty0) / len(tiers)
+    lab_w = 150
+    order = [(t, i) for t in tiers for i in rows[t]]
+    n_items = len(order)
+    intro = 0.6
+    total = intro + per * n_items + 2.0
+
+    def static(img):
+        d = ImageDraw.Draw(img)
+        for k, t in enumerate(tiers):
+            y = ty0 + k * rh
+            d.rounded_rectangle((60, y + 6, W - 60, y + rh - 6), radius=24, fill=WHITE)
+            d.rounded_rectangle((60, y + 6, 60 + lab_w, y + rh - 6), radius=24, fill=_TIER_COLORS.get(t, (200, 200, 210)))
+            d.text((60 + lab_w / 2, y + rh / 2), t, font=font("title", 70), fill=INK, anchor="mm")
+
+    def draw(t, img):
+        draw_text(img, title, CX, SAFE_TOP + 100, size=80, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
+        placed = {tt: 0 for tt in tiers}
+        size = min(rh - 26, (W - 120 - lab_w) / 5 - 10)
+        for k, (tt, i) in enumerate(order):
+            start = intro + k * per
+            row_i = tiers.index(tt); slot = placed[tt]; placed[tt] += 1
+            tx = 60 + lab_w + 20 + slot * (size + 10) + size / 2
+            ty = ty0 + row_i * rh + rh / 2
+            if t < start:
+                continue
+            f = ease_out_cubic((t - start) / 0.4)
+            x = lerp(CX, tx, f); y = lerp(1900, ty, f); sc = lerp(1.8, 1.0, f)
+            paste_sticker(img, ctx.st(i), x, y, size=int(size * sc), height=int(size * sc), rot=wobble(t, 4, 0.5) * (1 - f))
+        if t > intro + per * n_items + 0.3:
+            draw_pill(img, cta, CX, 1660, size=42, fill=ctx.accent, text_fill=WHITE, scale=pop(t, intro + per * n_items + 0.3))
+        elif t > intro:
+            k = min(n_items - 1, int((t - intro) / per))
+            draw_pill(img, f"{order[k][0]} 티어!", CX, 1660, size=42, fill=WHITE, text_fill=INK, shadow=ctx.shape_color)
+    return [Scene(total, draw, static)]
+
+
+register(FormatSpec(
+    "F29", "티어표", "공감형",
+    "S/A/B/C 티어표에 스티커가 하나씩 날아가 배치 → 반박 유도",
+    [Field("title", "타이틀", "text", "지큐 표정 티어표"),
+     Field("tiers", "티어 목록 (한 줄에 하나, 위에서부터)", "textarea", "S\nA\nB\nC"),
+     Field("items", "배치 목록 (한 줄에 '티어|스티커번호', 순서대로 등장)", "textarea",
+           lambda pk: "\n".join([f"S|{i}" for i in spread(len(pk), 2, 0)] + [f"A|{i}" for i in spread(len(pk), 3, 1)]
+                                + [f"B|{i}" for i in spread(len(pk), 2, 2)] + [f"C|{i}" for i in spread(len(pk), 2, 3)])),
+     Field("per", "배치 간격(초)", "float", 0.55, min=0.3, max=1.5),
+     Field("cta", "마무리 CTA", "text", "S티어 동의? 반박은 댓글로!")],
+    build_f29))
+
+
+# ── F30 알림 폭탄 ────────────────────────────────────────────
+def build_f30(ctx: Ctx, p: dict) -> List[Scene]:
+    title = P(p, "title", "POV: 단톡방 알림 폭탄")
+    app = P(p, "app", "톡")
+    raw = as_lines(P(p, "messages"), ["지큐|1|야 뭐해", "지큐|3|나와", "지큐|6|빨리!!", "지큐|12|구독 댓글 알림!", "지큐|17|놀자놀자", "지큐|22|최고다", "지큐|9|사랑해", "지큐|24|잘자"])
+    interval = float(P(p, "interval", 0.7))
+    hold = float(P(p, "hold", 2.0))
+    cta = P(p, "cta", "이런 친구 있으면 태그")
+    items = []
+    for k, l in enumerate(raw):
+        parts = [x.strip() for x in l.split("|")]
+        name = parts[0] if parts else "친구"
+        try:
+            idx = int(parts[1])
+        except Exception:
+            idx = (k % len(ctx.pack)) + 1
+        msg = parts[2] if len(parts) > 2 else ""
+        items.append((name, idx, msg))
+    nh, gap = 150, 16
+    top = 520; max_show = 6
+    total = interval * len(items) + hold
+
+    def static(img):
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((60, 320, W - 60, 1720), radius=70, fill=(30, 30, 40))
+        d.rounded_rectangle((70, 330, W - 70, 1710), radius=64, fill=(60, 64, 90))
+        d.text((CX, 420), "9:41", font=font("bold", 72), fill=WHITE, anchor="mm")
+
+    def draw(t, img):
+        k = min(len(items), int(t / interval) + 1)
+        show = items[max(0, k - max_show):k]
+        layer = Image.new("RGBA", img.size, (0, 0, 0, 0)); d = ImageDraw.Draw(layer)
+        # 최신이 위로
+        for j, (name, idx, msg) in enumerate(reversed(show)):
+            gi = k - 1 - j
+            s = pop(t, gi * interval, 0.3) if j == 0 else 1.0
+            y = top + j * (nh + gap) - (1 - s) * 60
+            a = int(255 * min(1, s + 0.2))
+            box = (100, y, W - 100, y + nh)
+            d.rounded_rectangle(box, radius=34, fill=(245, 246, 250, a))
+            d.text((box[0] + 150, y + 42), f"{app} · {name}", font=font("bold", 30), fill=(60, 60, 70, a), anchor="lm")
+            d.text((box[0] + 150, y + 98), msg, font=font("semi", 36), fill=(30, 30, 40, a), anchor="lm")
+            d.text((box[2] - 40, y + 42), "지금", font=font("reg", 26), fill=(150, 150, 160, a), anchor="rm")
+            d.rounded_rectangle((box[0] + 24, y + 22, box[0] + 130, y + nh - 22), radius=26, fill=(255, 255, 255, a))
+        img.alpha_composite(layer)
+        for j, (name, idx, msg) in enumerate(reversed(show)):
+            gi = k - 1 - j
+            s = pop(t, gi * interval, 0.3) if j == 0 else 1.0
+            y = top + j * (nh + gap) - (1 - s) * 60
+            paste_sticker(img, ctx.st(idx), 100 + 77, y + nh / 2, size=96, height=96)
+        draw_badge(img, k, W - 150, 400, r=44, fill=(255, 70, 70), size=40, scale=1 + 0.15 * (1 - clamp((t - (k - 1) * interval) / 0.3)))
+        draw_text(img, title, CX, SAFE_TOP - 20, size=64, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=9, max_w=W - 120)
+        if t > interval * len(items) + 0.3:
+            draw_pill(img, cta, CX, 1620, size=42, fill=ctx.accent, text_fill=WHITE, scale=pop(t, interval * len(items) + 0.3))
+    return [Scene(total, draw, static)]
+
+
+register(FormatSpec(
+    "F30", "알림 폭탄", "공감형",
+    "잠금화면 알림이 연속으로 쌓임(스티커 아바타 + 메시지) → 친구 태그 유도",
+    [Field("title", "타이틀", "text", "POV: 단톡방 알림 폭탄"),
+     Field("app", "앱 이름", "text", "톡"),
+     Field("messages", "알림 (한 줄에 '이름|스티커번호|메시지')", "textarea",
+           "지큐|1|야 뭐해\n지큐|3|나와\n지큐|6|빨리!!\n지큐|12|구독 댓글 알림!\n지큐|17|놀자놀자\n지큐|22|최고다\n지큐|9|사랑해\n지큐|24|잘자"),
+     Field("interval", "알림 간격(초)", "float", 0.7, min=0.3, max=2),
+     Field("hold", "마지막 정지(초)", "float", 2.0, min=0.5, max=5),
+     Field("cta", "마무리 CTA", "text", "이런 친구 있으면 태그")],
+    build_f30))
+
+
 # ──────────────────────────────────────────────────────────────
 # 진입점
 # ──────────────────────────────────────────────────────────────
