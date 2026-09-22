@@ -574,13 +574,32 @@ def ffmpeg_exe() -> str:
         return "ffmpeg"
 
 
+def resolve_audio(bgm) -> Optional[str]:
+    """bgm: None/'none' → 무음, 'cute'|'upbeat'|'chill'|'funny' → 기본 음악, 그 외 → 파일 경로."""
+    if not bgm or str(bgm).lower() in ("none", "off", "무음"):
+        return None
+    try:
+        import bgm_gen
+        if str(bgm) in bgm_gen.MOODS:
+            return bgm_gen.get_bgm(str(bgm))
+    except Exception:
+        pass
+    return str(bgm) if os.path.exists(str(bgm)) else None
+
+
 def render_video(tl: Timeline, out_path: str, fps: int = FPS, audio_path: Optional[str] = None,
-                 progress: Optional[Callable[[int, int], None]] = None, crf: int = 20) -> str:
+                 progress: Optional[Callable[[int, int], None]] = None, crf: int = 20,
+                 volume: float = 1.0, fade_out: float = 1.0) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-"]
     if audio_path:
-        cmd += ["-stream_loop", "-1", "-i", audio_path, "-shortest", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
+        af = [f"volume={max(0.0, volume):.2f}"]
+        if fade_out and tl.total > fade_out + 0.5:
+            af.append(f"afade=t=out:st={tl.total - fade_out:.2f}:d={fade_out:.2f}")
+        af.append("afade=t=in:st=0:d=0.15")
+        cmd += ["-stream_loop", "-1", "-i", audio_path, "-shortest", "-af", ",".join(af),
+                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", out_path]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -2398,11 +2417,11 @@ def build_timeline(pack: StickerPack, fmt_id: str, params: Optional[dict] = None
 
 
 def generate(pack_path: str, fmt_id: str, out_path: str, params: Optional[dict] = None,
-             theme="auto", bg_style="circles", brand="OGQ 마켓", audio: Optional[str] = None,
-             progress=None) -> str:
+             theme="auto", bg_style="circles", brand="OGQ 마켓", audio: Optional[str] = "cute",
+             progress=None, volume: float = 1.0) -> str:
     pack = StickerPack.load(pack_path)
     tl = build_timeline(pack, fmt_id, params, theme, bg_style, brand)
-    return render_video(tl, out_path, audio_path=audio, progress=progress)
+    return render_video(tl, out_path, audio_path=resolve_audio(audio), progress=progress, volume=volume)
 
 
 def main():
@@ -2414,7 +2433,9 @@ def main():
     ap.add_argument("--theme", default="auto", choices=["auto"] + list(THEMES))
     ap.add_argument("--bg", default="circles", choices=["circles", "halftone", "checker", "plain", "space"])
     ap.add_argument("--brand", default="OGQ 마켓")
-    ap.add_argument("--audio", default=None, help="BGM 파일(mp3/m4a) — 영상 길이에 맞춰 루프")
+    ap.add_argument("--bgm", "--audio", dest="bgm", default="cute",
+                    help="none(무음) | cute/upbeat/chill/funny(기본 음악) | 파일 경로(mp3/m4a/wav). 기본 cute")
+    ap.add_argument("--volume", type=float, default=1.0, help="음악 볼륨 배율 (0.0~2.0)")
     ap.add_argument("--list", action="store_true", help="포맷 목록")
     ap.add_argument("--demo", action="store_true", help="모든 포맷을 기본값으로 렌더")
     ap.add_argument("--preview", action="store_true", help="영상 대신 6프레임 미리보기 PNG")
@@ -2447,7 +2468,7 @@ def main():
         def prog(i, n, fid=fid):
             if i % 30 == 0 or i == n:
                 print(f"\r{fid} {i}/{n}", end="", flush=True)
-        render_video(tl, out, audio_path=a.audio, progress=prog)
+        render_video(tl, out, audio_path=resolve_audio(a.bgm), progress=prog, volume=a.volume)
         print(f"\r{fid} 완료 → {out} ({tl.total:.1f}s)")
 
 

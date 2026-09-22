@@ -18,7 +18,9 @@ python3 reels_gen.py 팩.zip -f F04 -o out.mp4                # 단일 포맷
 python3 reels_gen.py 팩.zip -f F04 -p '{"question":"..."}'   # 파라미터 지정
 python3 reels_gen.py 팩.zip --demo                           # 전체 포맷 → output/
 python3 reels_gen.py 팩.zip --demo --preview                 # 6프레임 미리보기 PNG
-python3 reels_gen.py 팩.zip -f F16 --audio bgm.mp3           # BGM 합성(자동 루프)
+python3 reels_gen.py 팩.zip -f F16 --bgm chill               # 기본 음악(cute/upbeat/chill/funny), 기본값 cute
+python3 reels_gen.py 팩.zip -f F16 --bgm bgm.mp3             # 첨부 파일(자동 루프·페이드아웃)
+python3 reels_gen.py 팩.zip -f F16 --bgm none                # 무음
 ```
 
 ## 구현된 포맷 (콘텐츠 포맷 리스트 시트 번호 기준)
@@ -59,9 +61,14 @@ python3 reels_gen.py 팩.zip -f F16 --audio bgm.mp3           # BGM 합성(자�
 시트의 25개 주제 전부 + 트렌드 포맷 5종(26~30) 대응. 2번의 슬라이딩 스티커 인터랙션과 17번의 트렌드 오디오는
 저작권/플랫폼 제약으로 인스타그램 업로드 단계에서 추가해야 함(영상은 그 배경용).
 
+## 음악
+- 기본 음악 4곡(밝은 통통 / 신나는 / 잔잔한 로파이 / 장난스러운)은 `bgm_gen.py`가 numpy로 직접 합성합니다. 외부 음원이 아니라 저작권 이슈가 없습니다.
+- 옵션: 기본 음악 / 파일 첨부 / 음악 없음. 볼륨 슬라이더, 끝 1초 페이드아웃, AAC 48kHz 스테레오로 인코딩.
+
 ## 구조
 - `reels_gen.py` — 엔진 + 포맷 정의(`FORMATS`). 새 포맷은 `build_fXX` 함수 + `register(FormatSpec(...))`.
 - `web_app.py` — Streamlit UI.
+- `bgm_gen.py` — 기본 BGM 합성기. `ig_publish.py` — 인스타 게시.
 - `fonts/` — Jua(제목), Pretendard(본문). 모두 OFL.
 - 렌더링: Pillow로 프레임 생성 → `imageio-ffmpeg` 내장 ffmpeg로 H.264 인코딩(별도 ffmpeg 설치 불필요).
 

@@ -61,8 +61,23 @@ with st.sidebar:
     bg_style = st.selectbox("배경 장식", ["circles", "halftone", "checker", "plain"],
                             format_func=lambda x: {"circles": "큰 원", "halftone": "도트", "checker": "체커 프레임", "plain": "없음"}[x])
     brand = st.text_input("하단 브랜드 문구", "OGQ 마켓")
-    bgm = st.file_uploader("BGM (선택, mp3/m4a/wav)", type=["mp3", "m4a", "wav", "aac"])
-    st.markdown('<div class="small">BGM은 영상 길이에 맞춰 자동 반복/컷됩니다. 트렌드 오디오는 인스타 업로드 시 넣는 걸 권장.</div>', unsafe_allow_html=True)
+
+    st.subheader("음악")
+    music_mode = st.radio("BGM", ["기본 음악", "파일 첨부", "음악 없음"], horizontal=True, label_visibility="collapsed")
+    bgm = None; bgm_mood = "cute"
+    if music_mode == "기본 음악":
+        import bgm_gen
+        bgm_mood = st.selectbox("분위기", list(bgm_gen.MOODS), format_func=lambda k: bgm_gen.MOODS[k])
+        try:
+            with open(bgm_gen.get_bgm(bgm_mood), "rb") as _f:
+                st.audio(_f.read(), format="audio/wav")
+        except Exception as _e:
+            st.warning(f"미리듣기 실패: {_e}")
+        st.markdown('<div class="small">프로그램이 직접 합성한 음악이라 저작권 걱정 없이 사용 가능합니다.</div>', unsafe_allow_html=True)
+    elif music_mode == "파일 첨부":
+        bgm = st.file_uploader("BGM 파일 (mp3/m4a/wav)", type=["mp3", "m4a", "wav", "aac"])
+        st.markdown('<div class="small">영상 길이에 맞춰 자동 반복/컷되고 끝에 1초 페이드아웃됩니다.</div>', unsafe_allow_html=True)
+    music_vol = st.slider("음악 볼륨", 0.0, 1.5, 0.8, 0.05) if music_mode != "음악 없음" else 0.0
 
     st.header("3. 인스타 연결 (선택)")
     with st.expander("게시 설정", expanded=False):
@@ -165,6 +180,10 @@ with left:
 
 
 def _audio_path():
+    if music_mode == "음악 없음":
+        return None
+    if music_mode == "기본 음악":
+        return rg.resolve_audio(bgm_mood)
     if bgm is None:
         return None
     ext = os.path.splitext(bgm.name)[1] or ".mp3"
@@ -184,7 +203,7 @@ def _render_bytes(tl, label=""):
     def prog(i, nn):
         if i % 10 == 0 or i == nn:
             bar.progress(i / nn, text=f"렌더링 중… {label} {i}/{nn} 프레임")
-    rg.render_video(tl, out, audio_path=_audio_path(), progress=prog)
+    rg.render_video(tl, out, audio_path=_audio_path(), progress=prog, volume=music_vol)
     bar.empty()
     with open(out, "rb") as f:
         b = f.read()
