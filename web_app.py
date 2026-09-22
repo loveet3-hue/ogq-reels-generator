@@ -34,9 +34,9 @@ def load_pack(data: bytes, name: str, _h: str):
 
 
 @st.cache_data(show_spinner=False)
-def contact_sheet_png(_h: str, _pack_id: int) -> bytes:
-    pack = st.session_state.get("_pack")
-    buf = io.BytesIO(); pack.contact_sheet(cols=6, cell=150).save(buf, "PNG"); return buf.getvalue()
+def contact_sheet_png(pack_hash: str, _pack) -> bytes:
+    # pack_hash가 캐시 키(밑줄 없는 인자만 해시됨), _pack은 해시 제외
+    buf = io.BytesIO(); _pack.contact_sheet(cols=6, cell=150).save(buf, "PNG"); return buf.getvalue()
 
 
 with st.sidebar:
@@ -78,7 +78,7 @@ left, right = st.columns([1.05, 1])
 
 with right:
     st.subheader(f"📦 {pack.name}  ·  스티커 {len(pack)}개")
-    st.image(contact_sheet_png(h, id(pack)), caption="번호를 보고 아래 입력칸에 스티커 번호를 지정하세요", use_container_width=True)
+    st.image(contact_sheet_png(h, pack), caption="번호를 보고 아래 입력칸에 스티커 번호를 지정하세요", use_container_width=True)
 
 with left:
     st.subheader("3. 포맷 선택")
