@@ -523,6 +523,7 @@ class Ctx:
         self.bg_color, self.shape_color, self.accent = bg, shape, accent
         self.bg_style = bg_style
         self.brand = brand
+        self.meta: Dict[str, Any] = {}   # 포맷이 결과(우승 번호 등)를 기록 → UI에 표시
         self._bg = self._build_bg()
 
     def st(self, idx) -> Image.Image:
@@ -1062,6 +1063,7 @@ def build_f06(ctx: Ctx, p: dict) -> List[Scene]:
     if not (1 <= winner <= 5):
         winner = rng.randint(1, 5)
     race_dur = float(P(p, "duration", 5))
+    ctx.meta["결과"] = f"{winner}번 우승 (스티커 {idxs[winner - 1]})"
     cta = P(p, "cta", "맞췄으면 댓글로 자랑해!")
     sts = [ctx.st(i) for i in idxs]
     lane_y = [520 + i * 210 for i in range(5)]
@@ -1176,6 +1178,7 @@ def build_f07(ctx: Ctx, p: dict) -> List[Scene]:
             col -= 1; path.append((xs[col], y))
     path.append((xs[col], y_bot))
     result_col = col
+    ctx.meta["결과"] = f"선택 {labels[pick - 1]} → 결과 스티커 {idxs[result_col]}"
     seg_len = [math.dist(path[i], path[i + 1]) for i in range(len(path) - 1)]
     total_len = sum(seg_len)
     sts = [ctx.st(i) for i in idxs]
@@ -2199,6 +2202,7 @@ def build_f26(ctx: Ctx, p: dict) -> List[Scene]:
     cta = P(p, "cta", "몇 초 만에 찾았어? 댓글로!")
     rng = random.Random(rseed(p))
     odd = rng.randrange(cols * rows)
+    ctx.meta["결과"] = f"다른 하나: {odd // cols + 1}행 {odd % cols + 1}열"
     st = ctx.st(idx); var = _variant(st, mode)
     gx0, gx1, gy0, gy1 = 70, W - 70, 480, 1560
     cw, ch = (gx1 - gx0) / cols, (gy1 - gy0) / rows
@@ -2261,6 +2265,7 @@ def build_f27(ctx: Ctx, p: dict) -> List[Scene]:
     tx, ty = rng.uniform(160, W - 160), rng.uniform(600, 1520)
     tpos = rng.randrange(len(items))
     items.insert(tpos, (tx, ty, target, rng.uniform(-15, 15), 0.9))
+    ctx.meta["결과"] = f"타깃 위치: 가로 {int(tx / W * 100)}% · 세로 {int(ty / H * 100)}% 지점"
     tst = ctx.st(target)
 
     def field(img, t, reveal=False):
@@ -2320,6 +2325,7 @@ def build_f28(ctx: Ctx, p: dict) -> List[Scene]:
     cell = 300; y0 = 760
     xs = [CX - cell - 20, CX, CX + cell + 20]
     result_txt = results[final[0] % len(results)]
+    ctx.meta["결과"] = ("잭팟! " if jackpot else "") + f"스티커 {idxs[final[0]]} · {result_txt}"
 
     def static(img):
         draw_card(img, (60, y0 - cell / 2 - 60, W - 60, y0 + cell / 2 + 60), radius=50, fill=(80, 60, 110), shadow=None)

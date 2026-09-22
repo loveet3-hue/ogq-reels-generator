@@ -228,11 +228,13 @@ with right:
         vid = _render_bytes(tl, spec.name)
         st.session_state["last_video"] = {"bytes": vid, "name": f"{pack.name}_{spec.id}_{spec.name}.mp4".replace("/", "·"),
                                           "info": f"{tl.total:.1f}초 영상 · {len(vid) / 1e6:.1f}MB · 렌더 {time.time() - t0:.0f}초",
-                                          "fmt": spec.name}
+                                          "fmt": spec.name, "meta": dict(tl.ctx.meta)}
 
     lv = st.session_state.get("last_video")
     if lv:
         st.success("완료! " + lv["info"])
+        if lv.get("meta"):
+            st.info("🎲 이번 영상의 랜덤 결과 → " + " / ".join(f"{k}: {v}" for k, v in lv["meta"].items()) + "  (생성할 때마다 바뀜)")
         st.video(lv["bytes"])
         st.download_button("⬇️ MP4 다운로드", lv["bytes"], file_name=lv["name"], mime="video/mp4", use_container_width=True)
 
