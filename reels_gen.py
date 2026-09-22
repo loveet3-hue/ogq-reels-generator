@@ -660,6 +660,15 @@ def P(params: dict, key: str, default=None):
     return v
 
 
+def rseed(params: dict) -> int:
+    """seed 파라미터가 0/비어 있으면 매번 새로운 랜덤 시드(결과가 고정되지 않게)."""
+    try:
+        v = int(P(params, "seed", 0) or 0)
+    except Exception:
+        v = 0
+    return v if v > 0 else random.randrange(1, 10 ** 9)
+
+
 def as_int_list(v, fallback: List[int]) -> List[int]:
     if v is None:
         return fallback
@@ -910,6 +919,7 @@ def build_f05(ctx: Ctx, p: dict) -> List[Scene]:
     speed = float(P(p, "speed", 8))
     dur = float(P(p, "duration", 8))
     cta = P(p, "cta", "멈춘 번호를 댓글로!")
+    idxs = list(idxs); random.Random(rseed(p)).shuffle(idxs)  # 매번 다른 순서
     sts = [ctx.st(i) for i in idxs]
 
     def static(img):
@@ -933,6 +943,7 @@ register(FormatSpec(
      Field("stickers", "사용할 스티커 번호들", "stickers", lambda pk: list(range(1, len(pk) + 1))),
      Field("speed", "초당 전환 수", "float", 8, min=2, max=20),
      Field("duration", "길이(초)", "float", 8, min=4, max=20),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
      Field("cta", "하단 문구", "text", "멈춘 번호를 댓글로!")],
     build_f05))
 
@@ -944,7 +955,7 @@ def build_f06(ctx: Ctx, p: dict) -> List[Scene]:
     while len(idxs) < 5:
         idxs.append(idxs[-1] if idxs else 1)
     winner = int(P(p, "winner", 0))
-    seed = int(P(p, "seed", 7))
+    seed = rseed(p)
     rng = random.Random(seed)
     if not (1 <= winner <= 5):
         winner = rng.randint(1, 5)
@@ -1017,7 +1028,7 @@ register(FormatSpec(
      Field("stickers", "출전 스티커 5개", "stickers", lambda pk: spread(len(pk), 5), n=5),
      Field("winner", "우승 번호(1~5, 0=랜덤)", "int", 0, min=0, max=5),
      Field("duration", "경주 시간(초)", "float", 5, min=3, max=10),
-     Field("seed", "랜덤 시드", "int", 7),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
      Field("cta", "마무리 CTA", "text", "맞췄으면 댓글로 자랑해!")],
     build_f06))
 
@@ -1032,7 +1043,7 @@ def build_f07(ctx: Ctx, p: dict) -> List[Scene]:
     while len(idxs) < 5:
         idxs.append(idxs[-1] if idxs else 1)
     pick = int(P(p, "pick", 0))
-    seed = int(P(p, "seed", 11))
+    seed = rseed(p)
     cta = P(p, "cta", "네 결과도 댓글로 알려줘!")
     rng = random.Random(seed)
     if not (1 <= pick <= 5):
@@ -1115,7 +1126,7 @@ register(FormatSpec(
      Field("labels", "선택지 5개 (한 줄에 하나)", "textarea", "A\nB\nC\nD\nE", n=5),
      Field("stickers", "결과 스티커 5개", "stickers", lambda pk: spread(len(pk), 5, 1), n=5),
      Field("pick", "따라갈 선택지(1~5, 0=랜덤)", "int", 0, min=0, max=5),
-     Field("seed", "사다리 시드", "int", 11),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
      Field("cta", "마무리 CTA", "text", "네 결과도 댓글로 알려줘!")],
     build_f07))
 
@@ -1757,7 +1768,7 @@ def build_f02(ctx: Ctx, p: dict) -> List[Scene]:
     dur = float(P(p, "duration", 6))
     cta = P(p, "cta", "몇 개 받았는지 댓글로!")
     sts = [ctx.st(i) for i in idxs]
-    rng = random.Random(int(P(p, "seed", 5)))
+    rng = random.Random(rseed(p))
     drops = []
     for k in range(int(dur * 1.6)):
         drops.append((rng.uniform(150, W - 150), k * dur / (dur * 1.6), rng.uniform(-90, 90), rng.uniform(0.7, 1.0), k % len(sts)))
@@ -1785,7 +1796,7 @@ register(FormatSpec(
     [Field("title", "타이틀", "text", "떨어지는 지큐를 받아보세요!"),
      Field("stickers", "떨어질 스티커들", "stickers", lambda pk: spread(len(pk), 6), n=6),
      Field("duration", "낙하 시간(초)", "float", 6, min=3, max=12),
-     Field("seed", "랜덤 시드", "int", 5),
+     Field("seed", "랜덤 시드 (0 = 매번 랜덤)", "int", 0, min=0),
      Field("cta", "마무리 CTA", "text", "몇 개 받았는지 댓글로!")],
     build_f02, tip="장애물/슬라이딩 스티커 인터랙션은 인스타그램 앱에서 얹어야 함 — 이 영상은 그 배경용"))
 
