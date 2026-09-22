@@ -264,18 +264,45 @@ with right:
 # ──────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("5. 일괄 생성 (기본값으로 여러 포맷 한 번에)")
-st.caption("텍스트는 각 포맷 기본 문구, 스티커는 팩에서 고르게 자동 선택됩니다. 세부 편집은 위에서 포맷별로.")
+st.caption("텍스트는 각 포맷 기본 문구, 스티커는 팩에서 고르게 자동 선택됩니다. 포맷당 10초 안팎 걸립니다.")
 all_ids = list(rg.FORMATS)
 chosen = st.multiselect("생성할 포맷", all_ids, default=["F05", "F08", "F12", "F16", "F20"],
-                        format_func=lambda i: f"{i} {rg.FORMATS[i].name}")
-if st.button("📦 선택한 포맷 전부 생성 → zip", use_container_width=True) and chosen:
-    zbuf = io.BytesIO()
-    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_STORED) as zf:
-        for fid in chosen:
-            sp = rg.FORMATS[fid]
-            tl = _build(sp, sp.defaults(pack))
-            vid = _render_bytes(tl, f"{fid} {sp.name}")
-            zf.writestr(f"{pack.name}_{fid}_{sp.name}.mp4".replace("/", "·"), vid)
-            st.write(f"✅ {fid} {sp.name} · {tl.total:.1f}초")
-    st.download_button("⬇️ zip 다운로드", zbuf.getvalue(), file_name=f"{pack.name}_릴스.zip", mime="application/zip",
-                       use_container_width=True)
+                        format_func=lambda i: f"{i[1:]}. {rg.FORMATS[i].name}")
+if st.button("📦 선택한 포맷 전부 생성", type="primary", use_container_width=True):
+    if not chosen:
+        st.warning("포맷을 하나 이상 선택하세요.")
+    else:
+        zbuf = io.BytesIO(); items = []
+        with st.status(f"일괄 생성 중… (0/{len(chosen)})", expanded=True) as status:
+            t_all = time.time()
+            with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_STORED) as zf:
+                for n_i, fid in enumerate(chosen, 1):
+                    sp = rg.FORMATS[fid]
+                    status.update(label=f"일괄 생성 중… ({n_i}/{len(chosen)}) {sp.name}")
+                    try:
+                        tl = _build(sp, sp.defaults(pack))
+                        vid = _render_bytes(tl, f"{fid} {sp.name}")
+                        fname = f"{pack.name}_{fid}_{sp.name}.mp4".replace("/", "·")
+                        zf.writestr(fname, vid)
+                        items.append({"fid": fid, "name": sp.name, "file": fname, "bytes": vid, "sec": tl.total, "meta": dict(tl.ctx.meta)})
+                        st.write(f"✅ {fid[1:]}. {sp.name} · {tl.total:.1f}초" + (" · " + " / ".join(f"{k}: {v}" for k, v in tl.ctx.meta.items()) if tl.ctx.meta else ""))
+                    except Exception as e:
+                        st.write(f"❌ {fid[1:]}. {sp.name} 실패: {e}")
+            status.update(label=f"완료: {len(items)}개 · {time.time() - t_all:.0f}초", state="complete", expanded=False)
+        st.session_state["batch"] = {"zip": zbuf.getvalue(), "zipname": f"{pack.name}_릴스_{len(items)}개.zip".replace("/", "·"), "items": items}
+
+bt = st.session_state.get("batch")
+if bt and bt["items"]:
+    st.success(f"일괄 생성 결과 {len(bt['items'])}개 · {len(bt['zip']) / 1e6:.1f}MB (다른 포맷을 생성할 때까지 유지됩니다)")
+    st.download_button("⬇️ 전체 zip 다운로드", bt["zip"], file_name=bt["zipname"], mime="application/zip",
+                       use_container_width=True, key="batch_zip_dl")
+    with st.expander("개별 영상 보기 / 다운로드", expanded=False):
+        for it in bt["items"]:
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.video(it["bytes"])
+            with c2:
+                st.markdown(f"**{it['fid'][1:]}. {it['name']}** · {it['sec']:.1f}초")
+                if it["meta"]:
+                    st.caption("🎲 " + " / ".join(f"{k}: {v}" for k, v in it["meta"].items()))
+                st.download_button("⬇️ MP4", it["bytes"], file_name=it["file"], mime="video/mp4", key=f"dl_{it['fid']}")
