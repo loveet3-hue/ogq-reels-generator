@@ -61,14 +61,19 @@ def github_ensure_repo(token: str, repo: str, log: Log = None) -> str:
     elif r.json().get("private"):
         raise PublishError(f"{repo} 는 비공개 저장소입니다. Pages 호스팅은 공개 저장소여야 합니다.")
 
+    default_url = f"https://{owner}.github.io/{name}/"
     p = _gh("GET", f"https://api.github.com/repos/{repo}/pages", token)
-    if p.status_code == 404:
-        _log(log, "GitHub Pages를 켭니다…")
-        p = _gh("POST", f"https://api.github.com/repos/{repo}/pages", token,
-                json={"source": {"branch": "main", "path": "/"}})
-        if p.status_code not in (200, 201):
-            raise PublishError(f"Pages 활성화 실패: {p.status_code} {p.text[:200]} — 토큰에 Pages 권한(administration: write)이 필요합니다.")
-    html = p.json().get("html_url") or f"https://{owner}.github.io/{name}/"
+    if p.status_code != 200:
+        p2 = _gh("POST", f"https://api.github.com/repos/{repo}/pages", token,
+                 json={"source": {"branch": "main", "path": "/"}})
+        if p2.status_code in (200, 201):
+            _log(log, "GitHub Pages를 켰습니다.")
+            p = p2
+        else:
+            # 토큰에 Pages 권한이 없어도, 저장소 설정에서 이미 켜 두었다면 기본 URL로 진행
+            _log(log, "Pages 상태를 확인할 권한이 없어 기본 주소로 진행합니다 (저장소 Settings → Pages 에서 main 브랜치가 켜져 있어야 함).")
+            return default_url
+    html = p.json().get("html_url") or default_url
     return html.rstrip("/") + "/"
 
 
