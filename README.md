@@ -59,3 +59,23 @@ python3 reels_gen.py 팩.zip -f F16 --audio bgm.mp3           # BGM 합성(자�
 - `web_app.py` — Streamlit UI.
 - `fonts/` — Jua(제목), Pretendard(본문). 모두 OFL.
 - 렌더링: Pillow로 프레임 생성 → `imageio-ffmpeg` 내장 ffmpeg로 H.264 인코딩(별도 ffmpeg 설치 불필요).
+
+## 인스타그램 바로 게시 (선택)
+
+공식 Instagram Graph API로 릴스를 게시합니다. 영상 생성 후 "📤 인스타그램에 바로 게시"에서 캡션을 넣고 게시.
+
+- 인스타는 **공개 URL**에서 영상을 가져가므로 호스팅이 필요합니다. 기본은 GitHub Pages(공개 저장소, 추가 가입 없음),
+  S3/Cloudflare R2도 지원. 게시가 끝나면 호스팅 파일은 자동 삭제됩니다.
+- 설정값은 `.streamlit/secrets.toml.example` 참고. Streamlit Cloud에서는 앱 설정 → Secrets에 붙여넣기.
+- 필요한 것
+  1. 인스타 프로페셔널 계정 + 연결된 페이스북 페이지
+  2. `instagram_content_publish` 권한이 포함된 장기 액세스 토큰 (Meta for Developers → 앱 → Graph API 탐색기)
+  3. GitHub Fine-grained 토큰: 호스팅 저장소에 Contents(write), Pages(write), Administration(write)
+- 한도: 계정당 24시간에 25개. 트렌드 오디오·슬라이딩 스티커는 API로 넣을 수 없음(인스타 앱에서 추가).
+
+CLI:
+
+```bash
+IG_USER_ID=... IG_ACCESS_TOKEN=... GITHUB_TOKEN=... MEDIA_REPO=loveet3-hue/ogq-reels-media \
+python3 ig_publish.py output/영상.mp4 --caption "캡션 #해시태그"
+```

@@ -7,6 +7,7 @@ import streamlit as st
 from PIL import Image
 
 import reels_gen as rg
+import ig_publish as igp
 
 st.set_page_config(page_title="OGQ 릴스 생성기", page_icon="🎬", layout="wide")
 
@@ -62,6 +63,39 @@ with st.sidebar:
     brand = st.text_input("하단 브랜드 문구", "OGQ 마켓")
     bgm = st.file_uploader("BGM (선택, mp3/m4a/wav)", type=["mp3", "m4a", "wav", "aac"])
     st.markdown('<div class="small">BGM은 영상 길이에 맞춰 자동 반복/컷됩니다. 트렌드 오디오는 인스타 업로드 시 넣는 걸 권장.</div>', unsafe_allow_html=True)
+
+    st.header("3. 인스타 연결 (선택)")
+    with st.expander("게시 설정", expanded=False):
+        def _sec(k, d=""):
+            try:
+                return str(st.secrets.get(k, d) or d)
+            except Exception:
+                return d
+        hosting_opts = {"github": "GitHub Pages (추가 가입 없음)", "s3": "S3 / Cloudflare R2", "url": "직접 URL 입력(테스트)"}
+        hosting = st.selectbox("영상 호스팅", list(hosting_opts), format_func=lambda k: hosting_opts[k],
+                               index=list(hosting_opts).index(_sec("HOSTING", "github")) if _sec("HOSTING", "github") in hosting_opts else 0)
+        ig_cfg = {"HOSTING": hosting,
+                  "IG_USER_ID": st.text_input("인스타 비즈니스 계정 ID", _sec("IG_USER_ID")),
+                  "IG_ACCESS_TOKEN": st.text_input("인스타 액세스 토큰", _sec("IG_ACCESS_TOKEN"), type="password")}
+        if hosting == "github":
+            ig_cfg["GITHUB_TOKEN"] = st.text_input("GitHub 토큰", _sec("GITHUB_TOKEN"), type="password")
+            ig_cfg["MEDIA_REPO"] = st.text_input("호스팅 저장소 (owner/repo)", _sec("MEDIA_REPO", "loveet3-hue/ogq-reels-media"))
+        elif hosting == "s3":
+            for k, lab, pw in [("S3_BUCKET", "버킷", False), ("S3_ACCESS_KEY", "Access Key", True), ("S3_SECRET_KEY", "Secret Key", True),
+                               ("S3_ENDPOINT", "Endpoint (R2 등, S3면 비움)", False), ("S3_REGION", "Region", False), ("S3_PUBLIC_BASE", "공개 URL 베이스", False)]:
+                ig_cfg[k] = st.text_input(lab, _sec(k), type="password" if pw else "default")
+        else:
+            ig_cfg["VIDEO_URL"] = st.text_input("공개 영상 URL", "")
+        st.markdown('<div class="small">값은 Streamlit Cloud의 Secrets에 넣어 두면 자동으로 채워집니다. 코드에 저장되지 않습니다.</div>', unsafe_allow_html=True)
+        if st.button("연결 테스트", use_container_width=True):
+            try:
+                info = igp.ig_check(ig_cfg["IG_USER_ID"], ig_cfg["IG_ACCESS_TOKEN"])
+                st.success(f"인스타 OK: @{info.get('username')} (팔로워 {info.get('followers_count', '?')})")
+                if hosting == "github":
+                    base = igp.github_ensure_repo(ig_cfg["GITHUB_TOKEN"], ig_cfg["MEDIA_REPO"], st.write)
+                    st.success(f"호스팅 OK: {base}")
+            except Exception as e:
+                st.error(str(e))
 
 if data is None:
     st.info("왼쪽에서 스티커팩 zip을 업로드하거나 샘플을 선택하세요. (main.png / tab.png / 1.png … 구조)")
@@ -171,10 +205,36 @@ with right:
         tl = _build(spec, params)
         t0 = time.time()
         vid = _render_bytes(tl, spec.name)
-        st.success(f"완료! {tl.total:.1f}초 영상 · {len(vid) / 1e6:.1f}MB · 렌더 {time.time() - t0:.0f}초")
-        st.video(vid)
-        fname = f"{pack.name}_{spec.id}_{spec.name}.mp4".replace("/", "·")
-        st.download_button("⬇️ MP4 다운로드", vid, file_name=fname, mime="video/mp4", use_container_width=True)
+        st.session_state["last_video"] = {"bytes": vid, "name": f"{pack.name}_{spec.id}_{spec.name}.mp4".replace("/", "·"),
+                                          "info": f"{tl.total:.1f}초 영상 · {len(vid) / 1e6:.1f}MB · 렌더 {time.time() - t0:.0f}초",
+                                          "fmt": spec.name}
+
+    lv = st.session_state.get("last_video")
+    if lv:
+        st.success("완료! " + lv["info"])
+        st.video(lv["bytes"])
+        st.download_button("⬇️ MP4 다운로드", lv["bytes"], file_name=lv["name"], mime="video/mp4", use_container_width=True)
+
+        with st.expander("📤 인스타그램에 바로 게시", expanded=False):
+            caption = st.text_area("캡션 (해시태그 포함)", f"{pack.name} 🎬 {lv['fmt']}\n#OGQ #OGQ마켓 #스티커 #이모티콘", height=120, key="ig_caption")
+            c1, c2 = st.columns(2)
+            share_feed = c1.checkbox("피드에도 표시", True)
+            cleanup = c2.checkbox("게시 후 호스팅 파일 삭제", True)
+            st.caption("공식 Instagram Graph API를 사용합니다. 하루 25개 한도, 처리에 1~3분 걸립니다.")
+            if st.button("🚀 지금 게시", type="primary", use_container_width=True):
+                if not ig_cfg.get("IG_USER_ID") or not ig_cfg.get("IG_ACCESS_TOKEN"):
+                    st.error("왼쪽 '인스타 연결' 설정을 먼저 채워 주세요.")
+                else:
+                    box = st.status("게시 진행 중…", expanded=True)
+                    try:
+                        res = igp.publish(ig_cfg, lv["bytes"], lv["name"], caption, share_feed, cleanup, log=box.write)
+                        box.update(label="게시 완료!", state="complete")
+                        st.success(f"게시됨 → {res.get('permalink') or res.get('media_id')}")
+                        if res.get("permalink"):
+                            st.link_button("인스타에서 보기", res["permalink"], use_container_width=True)
+                    except Exception as e:
+                        box.update(label="게시 실패", state="error")
+                        st.error(str(e))
 
 # ──────────────────────────────────────────────────────────────
 # 일괄 생성

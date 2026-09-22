@@ -2,3 +2,5 @@ streamlit>=1.35
 pillow>=10
 numpy>=1.24
 imageio-ffmpeg>=0.5
+requests>=2.31
+boto3>=1.34
