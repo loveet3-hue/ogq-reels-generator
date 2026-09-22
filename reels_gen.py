@@ -580,7 +580,7 @@ def render_video(tl: Timeline, out_path: str, fps: int = FPS, audio_path: Option
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-"]
     if audio_path:
-        cmd += ["-stream_loop", "-1", "-i", audio_path, "-shortest", "-c:a", "aac", "-b:a", "160k"]
+        cmd += ["-stream_loop", "-1", "-i", audio_path, "-shortest", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", out_path]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
