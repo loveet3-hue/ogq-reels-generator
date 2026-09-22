@@ -193,6 +193,46 @@ def auto_theme(pack: StickerPack) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
+# 효과음 이벤트 수집 (장면 그리기 중 자동 기록 → 렌더 후 오디오 트랙 생성)
+# ──────────────────────────────────────────────────────────────
+_SFX = {"on": True, "scene": 0, "offset": 0.0, "t": 0.0, "events": {}, "loops": {}}
+
+
+def sfx_now(name: str, gain: float = 1.0, key=None):
+    """현재 프레임 시각에 효과음 1회 (같은 키는 한 번만)."""
+    if not _SFX["on"]:
+        return
+    tg = _SFX["offset"] + _SFX["t"]
+    k = key if key is not None else (name, round(tg, 2))
+    if k not in _SFX["events"]:
+        _SFX["events"][k] = (tg, name, gain)
+
+
+def sfx_once(name: str, t: float, start: float, gain: float = 1.0):
+    """장면 로컬 시각 start 에 도달한 첫 프레임에서만 재생."""
+    if start <= t < start + 1.0 / FPS - 1e-6:
+        sfx_now(name, gain)
+
+
+def sfx_change(name: str, value, gain: float = 1.0):
+    """value(예: 카운트 숫자, 메시지 번호)가 바뀔 때마다 재생."""
+    sfx_now(name, gain, key=(_SFX["scene"], name, value))
+
+
+def sfx_loop(name: str, start: float, dur: float, gain: float = 0.5):
+    """장면 로컬 start 부터 dur 동안 루프 효과음(빗소리·달리기 등)."""
+    if not _SFX["on"]:
+        return
+    k = (_SFX["scene"], name, round(start, 2))
+    if k not in _SFX["loops"]:
+        _SFX["loops"][k] = (_SFX["offset"] + start, dur, name, gain)
+
+
+def sfx_reset(on: bool = True):
+    _SFX.update({"on": on, "scene": 0, "offset": 0.0, "t": 0.0, "events": {}, "loops": {}})
+
+
+# ──────────────────────────────────────────────────────────────
 # 이징/애니 유틸
 # ──────────────────────────────────────────────────────────────
 def clamp(x, a=0.0, b=1.0):
@@ -217,9 +257,10 @@ def ease_out_back(t, s=1.70158):
 
 
 def pop(t, start=0.0, dur=0.38):
-    """start 시점부터 dur 동안 0→1(약간 튕김). 이전엔 0."""
+    """start 시점부터 dur 동안 0→1(약간 튕김). 이전엔 0. 등장 순간 '뿅' 효과음."""
     if t < start:
         return 0.0
+    sfx_once("pop", t, start, 0.7)
     return ease_out_back((t - start) / dur)
 
 
@@ -414,6 +455,7 @@ def star_points(cx, cy, r, inner=0.38, n=4, rot=0.0):
 def draw_sparkles(img, t, cx, cy, radius, n=8, seed=1, color=(255, 205, 60), rmax=34, start=0.0):
     if t < start:
         return
+    sfx_once("sparkle", t, start, 0.45)
     rng = random.Random(seed)
     d = ImageDraw.Draw(img)
     for i in range(n):
@@ -430,6 +472,7 @@ def draw_sparkles(img, t, cx, cy, radius, n=8, seed=1, color=(255, 205, 60), rma
 def draw_confetti(img, t, seed=3, n=46, start=0.0, palette=None):
     if t < start:
         return
+    sfx_once("tada", t, start, 0.9)
     palette = palette or [(255, 120, 155), (255, 200, 60), (90, 200, 150), (90, 160, 255), (170, 130, 255)]
     rng = random.Random(seed)
     d = ImageDraw.Draw(img)
@@ -554,10 +597,12 @@ class Timeline:
 
     def frame(self, t: float) -> Image.Image:
         acc = 0.0
-        for s in self.scenes:
+        for idx, s in enumerate(self.scenes):
             if t < acc + s.duration or s is self.scenes[-1]:
+                tl = min(t - acc, s.duration)
+                _SFX.update({"scene": idx, "offset": acc, "t": tl})
                 img = s.base(self.ctx).copy()
-                s.draw(min(t - acc, s.duration), img)
+                s.draw(tl, img)
                 return img
             acc += s.duration
         return self.ctx.bg()
@@ -589,19 +634,15 @@ def resolve_audio(bgm) -> Optional[str]:
 
 def render_video(tl: Timeline, out_path: str, fps: int = FPS, audio_path: Optional[str] = None,
                  progress: Optional[Callable[[int, int], None]] = None, crf: int = 20,
-                 volume: float = 1.0, fade_out: float = 1.0) -> str:
+                 volume: float = 1.0, fade_out: float = 1.0, sfx: bool = True, sfx_volume: float = 1.0) -> str:
+    """1패스: 프레임 → 무음 H.264. 2패스: BGM(루프·페이드) + 효과음 트랙 합성(-c:v copy)."""
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    sfx_reset(on=sfx)
+    tmp_video = out_path + ".video.tmp.mp4"
     cmd = [ffmpeg_exe(), "-y", "-loglevel", "error",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-"]
-    if audio_path:
-        af = [f"volume={max(0.0, volume):.2f}"]
-        if fade_out and tl.total > fade_out + 0.5:
-            af.append(f"afade=t=out:st={tl.total - fade_out:.2f}:d={fade_out:.2f}")
-        af.append("afade=t=in:st=0:d=0.15")
-        cmd += ["-stream_loop", "-1", "-i", audio_path, "-shortest", "-af", ",".join(af),
-                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart", out_path]
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
+           "-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
+           "-movflags", "+faststart", tmp_video]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     n = max(1, int(round(tl.total * fps)))
     try:
@@ -616,6 +657,44 @@ def render_video(tl: Timeline, out_path: str, fps: int = FPS, audio_path: Option
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError("ffmpeg 오류: " + err[-2000:])
+
+    events = list(_SFX["events"].values()); loops = list(_SFX["loops"].values())
+    sfx_wav = None
+    if sfx and (events or loops):
+        try:
+            import sfx_gen
+            sfx_wav = out_path + ".sfx.tmp.wav"
+            sfx_gen.write_wav(sfx_wav, sfx_gen.build_track(events, loops, tl.total))
+        except Exception:
+            sfx_wav = None
+    if not audio_path and not sfx_wav:
+        os.replace(tmp_video, out_path)
+        return out_path
+
+    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-i", tmp_video]
+    parts, labels, idx = [], [], 1
+    if audio_path:
+        cmd += ["-stream_loop", "-1", "-i", audio_path]
+        af = [f"volume={max(0.0, volume):.2f}", "afade=t=in:st=0:d=0.15"]
+        if fade_out and tl.total > fade_out + 0.5:
+            af.append(f"afade=t=out:st={tl.total - fade_out:.2f}:d={fade_out:.2f}")
+        parts.append(f"[{idx}:a]" + ",".join(af) + "[b]"); labels.append("[b]"); idx += 1
+    if sfx_wav:
+        cmd += ["-i", sfx_wav]
+        parts.append(f"[{idx}:a]volume={max(0.0, sfx_volume):.2f}[s]"); labels.append("[s]")
+    if len(labels) == 2:
+        parts.append("[b][s]amix=inputs=2:duration=shortest:normalize=0[a]")
+    else:
+        parts[-1] = parts[-1][:-3] + "[a]"
+    cmd += ["-filter_complex", ";".join(parts), "-map", "0:v", "-map", "[a]", "-shortest",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+            "-movflags", "+faststart", out_path]
+    r = subprocess.run(cmd, capture_output=True)
+    for f in (tmp_video, sfx_wav):
+        if f and os.path.exists(f):
+            os.remove(f)
+    if r.returncode != 0:
+        raise RuntimeError("ffmpeg(오디오) 오류: " + r.stderr.decode("utf-8", "ignore")[-2000:])
     return out_path
 
 
@@ -817,6 +896,7 @@ def build_f01(ctx: Ctx, p: dict) -> List[Scene]:
         d.ellipse((CX - r, circle_y - r, CX + r, circle_y + r), fill=WHITE, outline=ctx.accent, width=16)
         sec = int(t); frac = t - sec
         num = max(1, count - sec)
+        sfx_change("beep", num, 0.8)
         draw_ring_countdown(img, CX, circle_y, r + 34, 1 - frac, ctx.accent, width=18, track=ctx.shape_color)
         sc = 1.25 - 0.25 * ease_out_cubic(frac * 2)
         draw_text(img, str(num), CX, circle_y, size=int(170 * sc), font_name="title", fill=ctx.accent)
@@ -860,8 +940,10 @@ def build_f03(ctx: Ctx, p: dict) -> List[Scene]:
             paste_sticker(img, sil, CX, 960 + bob(t, 6), size=760, scale=pop(t, 0, 0.4))
             draw_ring_countdown(img, CX, 1470, 70, 1 - t / timer, ctx.accent, width=16, track=ctx.shape_color)
             draw_text(img, str(max(1, math.ceil(timer - t))), CX, 1470, size=70, fill=ctx.ink)
+            sfx_change("beep", max(1, math.ceil(timer - t)), 0.7)
 
         def draw_a(t, img, st=st, label=label, i=i):
+            sfx_once("ding", t, 0.0, 0.8)
             draw_badge(img, f"Q{i + 1}", 130, SAFE_TOP + 60, r=58, fill=ctx.accent, size=50)
             draw_text(img, "정답!", CX, 430, size=96, font_name="title", fill=ctx.accent, stroke=WHITE, stroke_w=10)
             draw_sparkles(img, t, CX, 960, 420, n=8, seed=20 + i, start=0.1)
@@ -948,6 +1030,7 @@ def build_f05(ctx: Ctx, p: dict) -> List[Scene]:
         draw_text(img, title, CX, SAFE_TOP + 110, size=84, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
         draw_pill(img, sub, CX, SAFE_TOP + 230, size=40, fill=ctx.accent, text_fill=WHITE)
         k = int(t * speed) % len(sts)
+        sfx_change("tick", int(t * speed), 0.6)
         paste_sticker(img, sts[k], CX, 990, size=720, height=700)
         draw_badge(img, idxs[k], W - 190, 640, r=54, fill=ctx.accent, size=48)
         draw_text(img, cta, CX, 1560, size=56, fill=ctx.ink, stroke=WHITE, stroke_w=8)
@@ -1019,6 +1102,9 @@ def build_f06(ctx: Ctx, p: dict) -> List[Scene]:
         draw_pill(img, "댓글로 예측해봐!", CX, 1650, size=42, fill=ctx.accent, text_fill=WHITE, scale=pop(t, 0.6))
 
     def draw_race(t, img):
+        sfx_once("whistle", t, 0.0, 0.8)
+        sfx_loop("run", 0.3, finish[winner - 1], 0.6)
+        sfx_once("cheer", t, finish[winner - 1], 0.9)
         draw_text(img, title, CX, SAFE_TOP + 110, size=72, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10, max_w=W - 140)
         lanes(img)
         for i, y in enumerate(lane_y):
@@ -1123,7 +1209,9 @@ def build_f07(ctx: Ctx, p: dict) -> List[Scene]:
             else:
                 f = (L - acc) / sl if sl else 0
                 head = (lerp(path[i][0], path[i + 1][0], f), lerp(path[i][1], path[i + 1][1], f))
-                d.line((path[i], head), fill=ctx.accent, width=18); break
+                d.line((path[i], head), fill=ctx.accent, width=18)
+                sfx_change("swish", i, 0.5)
+                break
         r = 26
         d.ellipse((head[0] - r, head[1] - r, head[0] + r, head[1] + r), fill=ctx.accent, outline=WHITE, width=6)
         draw_pill(img, f"{labels[pick - 1]} 선택!", CX, 1610, size=42, fill=ctx.accent, text_fill=WHITE)
@@ -1210,6 +1298,7 @@ def build_f11(ctx: Ctx, p: dict) -> List[Scene]:
         rank = k + 1; label, idx = items[k]; st = ctx.st(idx)
 
         def draw(t, img, rank=rank, label=label, st=st):
+            sfx_once("hit", t, 0.05, 0.8)
             draw_pill(img, header, CX, SAFE_TOP + 70, size=38, fill=WHITE, text_fill=INK)
             if rank == 1:
                 draw_confetti(img, t, seed=31)
@@ -1258,6 +1347,7 @@ def build_f12(ctx: Ctx, p: dict) -> List[Scene]:
     scenes = [Scene(2.4, draw_intro)]
     for k, st in enumerate(sts):
         def draw(t, img, st=st, k=k):
+            sfx_once("whoosh", t, 0.0, 0.7)
             draw_pill(img, name, CX, SAFE_TOP + 70, size=40, fill=WHITE, text_fill=INK)
             x_from = -600 if k % 2 == 0 else W + 600
             x = lerp(x_from, CX, ease_out_cubic(t / 0.45))
@@ -1339,6 +1429,7 @@ def build_f13(ctx: Ctx, p: dict) -> List[Scene]:
 
     def draw(t, img):
         k = min(len(bubbles), int(t / interval) + 1)
+        sfx_change("tok", k, 0.8)
         # 스크롤 오프셋(마지막 표시 버블이 bottom 안에 오도록)
         def off_for(kk):
             if kk <= 0:
@@ -1454,6 +1545,7 @@ def build_f16(ctx: Ctx, p: dict) -> List[Scene]:
             d.rounded_rectangle((bx0 + 10, by - 30, bx0 + 10 + (bx1 - bx0 - 20) * pv, by + 30), radius=30, fill=ctx.accent)
         d.text((CX - 20, by), f"{int(pv * 100)}%", font=font("bold", 40), fill=INK if pv < 0.55 else WHITE, anchor="mm")
         k = min(len(sts) - 1, int(t / per)); tl = t - k * per
+        sfx_change("charge", k, 0.45)
         paste_sticker(img, sts[k], CX, 1040 + bob(tl, 10, 1.0), size=780, scale=pop(tl, 0, 0.4), rot=wobble(tl, 3, 1.0))
         draw_sparkles(img, t, CX, 1040, 420, n=6, seed=60 + k)
 
@@ -1488,6 +1580,8 @@ def build_f18(ctx: Ctx, p: dict) -> List[Scene]:
     cy = 1000
 
     def draw(t, img):
+        sfx_loop("hum", 0, dur, 0.5)
+        sfx_change("sparkle", int(t / 1.5), 0.3)
         def rings(d):
             for k in range(4):
                 ph = (t * 0.45 + k / 4) % 1.0
@@ -1698,6 +1792,16 @@ def build_f24(ctx: Ctx, p: dict) -> List[Scene]:
         overlay(img, {"steam": steam, "sweat": sweat, "hearts": hearts, "sparkle": sparkle, "anger": anger}.get(effect, steam))
 
     def draw(t, img):
+        if effect == "steam":
+            sfx_loop("hiss", 0, dur, 0.35)
+        elif effect == "hearts":
+            sfx_loop("bubble", 0, dur, 0.4)
+        elif effect == "sparkle":
+            sfx_change("sparkle", int(t / 1.2), 0.3)
+        elif effect == "anger":
+            sfx_change("thud", int(t / 0.8), 0.5)
+        elif effect == "sweat":
+            sfx_change("tick", int(t / 0.5), 0.3)
         breathe = 1 + 0.02 * math.sin(2 * math.pi * t / 2.6)
         if effect in ("steam", "sparkle"):
             fx(t, img)
@@ -1760,6 +1864,7 @@ def build_f25(ctx: Ctx, p: dict) -> List[Scene]:
     scenes = []
     for k, cap in enumerate(captions):
         def draw(t, img, cap=cap, k=k):
+            sfx_loop({"rain": "rain", "snow": "snowwind", "sun": "birds", "wind": "wind"}.get(weather, "rain"), 0, per, 0.5)
             if weather in ("sun",):
                 weather_fx(t, img)
             paste_sticker(img, st, CX, cy + bob(t, 10, 2.2), size=780, scale=pop(t, 0, 0.4) if k == 0 else 1.0, rot=wobble(t, 2, 2.2))
@@ -1803,6 +1908,8 @@ def build_f02(ctx: Ctx, p: dict) -> List[Scene]:
             tt = t - t0
             if tt < 0 or tt > 2.6:
                 continue
+            if tt < 1.0 / FPS - 1e-6:
+                sfx_change("whoosh", round(t0, 3), 0.4)
             y = -200 + (zone_y + 250) * (tt / 2.4) ** 1.4
             paste_sticker(img, sts[k], x + 30 * math.sin(tt * 3), y, size=int(380 * sc), rot=rot + tt * 60)
     return ([title_scene(ctx, title, 1.5, sub="손가락으로 받아봐!")]
@@ -1923,12 +2030,14 @@ def build_f15(ctx: Ctx, p: dict) -> List[Scene]:
     def draw_knock(t, img):
         draw_text(img, sub, CX, 400, size=64, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
         shake = 10 * math.sin(t * 40) if (0.8 < t < 1.1 or 1.6 < t < 1.9) else 0
+        sfx_once("knock", t, 0.8, 0.9); sfx_once("knock", t, 1.6, 0.9)
         door(img, 0.0, shake)
         if t > 0.8:
             draw_pill(img, "똑똑!", CX + 260, 620, size=48, fill=WHITE, text_fill=INK, scale=pop(t, 0.8), shadow=ctx.shape_color)
         draw_text(img, "누가 오는 걸까?", CX, 1560, size=56, fill=ctx.ink, stroke=WHITE, stroke_w=8, alpha=fade(t, 0.3))
 
     def draw_open(t, img):
+        sfx_once("creak", t, 0.0, 0.8)
         draw_text(img, sub, CX, 400, size=64, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
         op = ease_in_out(t / 1.0)
         d = ImageDraw.Draw(img)
@@ -1979,6 +2088,7 @@ def build_f17(ctx: Ctx, p: dict) -> List[Scene]:
     def draw(t, img):
         b = t / beat; bi = int(b); bf = b - bi
         k = (bi // beats_per_cut) % len(sts)
+        sfx_change("hit", bi, 0.35)
         d = ImageDraw.Draw(img)
         # 비트 링
         r = 360 + 220 * bf
@@ -2029,16 +2139,22 @@ def build_f22(ctx: Ctx, p: dict) -> List[Scene]:
             draw_pill(img, header, CX, SAFE_TOP + 80, size=44, fill=ctx.accent, text_fill=WHITE)
             x, y, sc, rot, flip = CX, 980, 1.0, 0.0, False
             if motion == "walk":
+                sfx_loop("run", 0, per, 0.5)
                 x = lerp(-300, W + 300, t / per); y = 980 + abs(math.sin(t * 9)) * -30; rot = wobble(t, 6, 0.5)
             elif motion == "jump":
+                sfx_change("boing", int(t / 0.7), 0.7)
                 ph = (t / 0.7) % 1.0; y = 980 - 260 * math.sin(math.pi * ph); sc = 1 + 0.08 * math.sin(math.pi * ph)
             elif motion == "shake":
+                sfx_once("rattle", t, 0.0, 0.6)
                 x = CX + 26 * math.sin(t * 28); rot = 4 * math.sin(t * 28)
             elif motion == "spin":
+                sfx_once("whirr", t, 0.0, 0.6)
                 rot = 360 * (t / per); sc = pop(t, 0, 0.5)
             elif motion == "zoom":
+                sfx_once("charge", t, 0.0, 0.5)
                 sc = 0.5 + 0.6 * ease_out_cubic(t / per)
             elif motion == "slide":
+                sfx_once("whoosh", t, 0.0, 0.7)
                 y = lerp(H + 400, 980, ease_out_back(t / 0.6))
             else:
                 sc = pop(t, 0, 0.4); y = 980 + bob(t, 10)
@@ -2107,8 +2223,10 @@ def build_f26(ctx: Ctx, p: dict) -> List[Scene]:
         grid(img, t)
         draw_ring_countdown(img, CX, 1635, 56, 1 - t / timer, ctx.accent, width=14, track=ctx.shape_color)
         draw_text(img, str(max(1, math.ceil(timer - t))), CX, 1635, size=52, fill=ctx.ink)
+        sfx_change("beep", max(1, math.ceil(timer - t)), 0.7)
 
     def draw_a(t, img):
+        sfx_once("ding", t, 0.0, 0.8)
         draw_text(img, "정답은 여기!", CX, SAFE_TOP + 90, size=78, font_name="title", fill=(255, 80, 90), stroke=WHITE, stroke_w=10)
         grid(img, t, reveal=True)
         draw_pill(img, cta, CX, 1640, size=40, fill=ctx.accent, text_fill=WHITE, scale=pop(t, 0.3))
@@ -2162,8 +2280,10 @@ def build_f27(ctx: Ctx, p: dict) -> List[Scene]:
         field(img, t)
         draw_ring_countdown(img, W - 130, 420, 60, 1 - t / timer, ctx.accent, width=14, track=ctx.shape_color)
         draw_text(img, str(max(1, math.ceil(timer - t))), W - 130, 420, size=54, fill=ctx.ink)
+        sfx_change("beep", max(1, math.ceil(timer - t)), 0.7)
 
     def draw_a(t, img):
+        sfx_once("ding", t, 0.0, 0.8)
         draw_pill(img, "여기 있었지롱!", CX, SAFE_TOP + 70, size=46, fill=(255, 80, 90), text_fill=WHITE)
         field(img, t, reveal=True)
         draw_pill(img, cta, CX, 1650, size=40, fill=WHITE, text_fill=INK, scale=pop(t, 0.3), shadow=ctx.shape_color)
@@ -2218,6 +2338,10 @@ def build_f28(ctx: Ctx, p: dict) -> List[Scene]:
         return (final[k] - speed * (stop - t) * 0.6) % n
 
     def draw_spin(t, img):
+        sfx_loop("spin", 0, stops[2], 0.5)
+        for k_ in range(3):
+            sfx_once("thud", t, stops[k_], 0.9)
+        sfx_once("fanfare" if jackpot else "ding", t, stops[2] + 0.2, 0.9)
         draw_text(img, title, CX, SAFE_TOP + 100, size=80, font_name="title", fill=ctx.ink, stroke=WHITE, stroke_w=10)
         for k, x in enumerate(xs):
             pos = reel_pos(k, t)
@@ -2309,6 +2433,7 @@ def build_f29(ctx: Ctx, p: dict) -> List[Scene]:
             ty = ty0 + row_i * rh + rh / 2
             if t < start:
                 continue
+            sfx_once("whoosh", t, start, 0.6); sfx_once("thud", t, start + 0.4, 0.5)
             f = ease_out_cubic((t - start) / 0.4)
             x = lerp(CX, tx, f); y = lerp(1900, ty, f); sc = lerp(1.8, 1.0, f)
             paste_sticker(img, ctx.st(i), x, y, size=int(size * sc), height=int(size * sc), rot=wobble(t, 4, 0.5) * (1 - f))
@@ -2363,6 +2488,7 @@ def build_f30(ctx: Ctx, p: dict) -> List[Scene]:
 
     def draw(t, img):
         k = min(len(items), int(t / interval) + 1)
+        sfx_change("notify", k, 0.9)
         show = items[max(0, k - max_show):k]
         layer = Image.new("RGBA", img.size, (0, 0, 0, 0)); d = ImageDraw.Draw(layer)
         # 최신이 위로
@@ -2436,6 +2562,8 @@ def main():
     ap.add_argument("--bgm", "--audio", dest="bgm", default="cute",
                     help="none(무음) | cute/upbeat/chill/funny(기본 음악) | 파일 경로(mp3/m4a/wav). 기본 cute")
     ap.add_argument("--volume", type=float, default=1.0, help="음악 볼륨 배율 (0.0~2.0)")
+    ap.add_argument("--no-sfx", action="store_true", help="효과음 끄기")
+    ap.add_argument("--sfx-volume", type=float, default=1.0, help="효과음 볼륨 배율")
     ap.add_argument("--list", action="store_true", help="포맷 목록")
     ap.add_argument("--demo", action="store_true", help="모든 포맷을 기본값으로 렌더")
     ap.add_argument("--preview", action="store_true", help="영상 대신 6프레임 미리보기 PNG")
@@ -2468,7 +2596,8 @@ def main():
         def prog(i, n, fid=fid):
             if i % 30 == 0 or i == n:
                 print(f"\r{fid} {i}/{n}", end="", flush=True)
-        render_video(tl, out, audio_path=resolve_audio(a.bgm), progress=prog, volume=a.volume)
+        render_video(tl, out, audio_path=resolve_audio(a.bgm), progress=prog, volume=a.volume,
+                     sfx=not a.no_sfx, sfx_volume=a.sfx_volume)
         print(f"\r{fid} 완료 → {out} ({tl.total:.1f}s)")
 
 

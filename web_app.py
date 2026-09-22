@@ -78,6 +78,8 @@ with st.sidebar:
         bgm = st.file_uploader("BGM 파일 (mp3/m4a/wav)", type=["mp3", "m4a", "wav", "aac"])
         st.markdown('<div class="small">영상 길이에 맞춰 자동 반복/컷되고 끝에 1초 페이드아웃됩니다.</div>', unsafe_allow_html=True)
     music_vol = st.slider("음악 볼륨", 0.0, 1.5, 0.8, 0.05) if music_mode != "음악 없음" else 0.0
+    sfx_on = st.checkbox("효과음 (장면에 맞춰 자동: 등장 뿅·카운트다운·알림·달리기·잭팟 등)", True)
+    sfx_vol = st.slider("효과음 볼륨", 0.0, 1.5, 0.9, 0.05) if sfx_on else 0.0
 
     st.header("3. 인스타 연결 (선택)")
     with st.expander("게시 설정", expanded=False):
@@ -203,7 +205,7 @@ def _render_bytes(tl, label=""):
     def prog(i, nn):
         if i % 10 == 0 or i == nn:
             bar.progress(i / nn, text=f"렌더링 중… {label} {i}/{nn} 프레임")
-    rg.render_video(tl, out, audio_path=_audio_path(), progress=prog, volume=music_vol)
+    rg.render_video(tl, out, audio_path=_audio_path(), progress=prog, volume=music_vol, sfx=sfx_on, sfx_volume=sfx_vol)
     bar.empty()
     with open(out, "rb") as f:
         b = f.read()
